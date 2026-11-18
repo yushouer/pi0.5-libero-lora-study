@@ -1,0 +1,4 @@
+checkpoint_step,successes,trials,success_rate,validation_flow_matching_loss,validation_samples,seed,replan_steps,action_horizon
+2000,6,50,0.12,0.04066581095661435,1222,7,5,10
+4000,22,50,0.44,0.0392593990203476,1222,7,5,10
+5999,29,50,0.58,0.03848784141401694,1222,7,5,10

@@ -1,0 +1,93 @@
+{
+  "project": "pi0.5 VLA LoRA fine-tuning and LIBERO single-task diagnostics",
+  "benchmark": {
+    "name": "LIBERO-10",
+    "official_finetuned_checkpoint_local_replication": {
+      "successes": 469,
+      "trials": 500,
+      "success_rate": 0.938
+    },
+    "official_finetuned_book_task": {
+      "successes": 50,
+      "trials": 50,
+      "success_rate": 1.0,
+      "note": "Reference result from earlier baseline evaluation; not matched training budget or identical-model comparison"
+    }
+  },
+  "dataset": {
+    "repo_id": "physical-intelligence/libero",
+    "total_tasks": 40,
+    "total_episodes": 1693,
+    "total_frames": 273465,
+    "task_text": "pick up the book and place it in the back compartment of the caddy",
+    "dataset_task_index": 9,
+    "libero_10_eval_task_index": 5,
+    "train_episodes": 35,
+    "train_frames": 6412,
+    "val_episodes": 6,
+    "val_frames": 1222,
+    "split_seed": 7
+  },
+  "model": {
+    "base": "pi05_base",
+    "action_horizon": 10,
+    "action_raw_dimensions": 7,
+    "action_model_dimensions": 32,
+    "state_raw_dimensions": 8,
+    "state_model_dimensions": 32,
+    "paligemma_variant": "gemma_2b_lora",
+    "action_expert_variant": "gemma_300m_lora",
+    "num_params": 3403421456,
+    "trainable_params": 466957072,
+    "lora_params": 49987584,
+    "non_lora_trainable_params": 416969488,
+    "freeze_params": 2936464384,
+    "training_type": "LoRA plus unfrozen non-LLM parameters"
+  },
+  "optimization": {
+    "framework": "JAX/Flax NNX",
+    "gpu": "single RTX 4090 (24GB)",
+    "batch_size": 1,
+    "train_steps": 6000,
+    "warmup_steps": 200,
+    "peak_learning_rate": 2.5e-05,
+    "decay_steps": 6000,
+    "end_learning_rate": 2.5e-06,
+    "optimizer": "AdamW",
+    "gradient_clip_norm": 1.0
+  },
+  "evaluation": {
+    "seed": 7,
+    "replan_steps": 5,
+    "trials_per_checkpoint": 50,
+    "validation_frames": 1222,
+    "validation_seed": 7,
+    "checkpoints": [
+      {
+        "step": 2000,
+        "successes": 6,
+        "trials": 50,
+        "validation_flow_matching_loss": 0.04066581095661435
+      },
+      {
+        "step": 4000,
+        "successes": 22,
+        "trials": 50,
+        "validation_flow_matching_loss": 0.0392593990203476
+      },
+      {
+        "step": 5999,
+        "successes": 29,
+        "trials": 50,
+        "validation_flow_matching_loss": 0.03848784141401694
+      }
+    ]
+  },
+  "failure_analysis": {
+    "total_failed": 21,
+    "placement_incomplete": 13,
+    "grasp_failed": 7,
+    "contact_destabilization": 1,
+    "method": "Single agentview video visual review; observational categories, not proven causal mechanisms"
+  }
+}

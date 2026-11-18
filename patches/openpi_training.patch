@@ -1,0 +1,294 @@
+diff --git a/src/openpi/models/pi0_config.py b/src/openpi/models/pi0_config.py
+index 584d83f..5d12564 100644
+--- a/src/openpi/models/pi0_config.py
++++ b/src/openpi/models/pi0_config.py
+@@ -18,17 +18,17 @@ if TYPE_CHECKING:
+ @dataclasses.dataclass(frozen=True)
+ class Pi0Config(_model.BaseModelConfig):
+     dtype: str = "bfloat16"
+-    paligemma_variant: _gemma.Variant = "gemma_2b"
+-    action_expert_variant: _gemma.Variant = "gemma_300m"
++    paligemma_variant: _gemma.Variant = "gemma_2b"       # VLM 的语言主干配置
++    action_expert_variant: _gemma.Variant = "gemma_300m" # Action Expert 的配置
+ 
+     # Set the model specific defaults.
+-    action_dim: int = 32
+-    action_horizon: int = 50
++    action_dim: int = 32       # 模型的动作维度容量，不代表 LIBERO 真有 32 个关节或控制量
++    action_horizon: int = 50   # 默认一次生成 50 步；LIBERO 微调配置会改成 10
+     max_token_len: int = None  # type: ignore
+     # Pi05 has two differences from Pi0:
+     # - the state input is part of the discrete language tokens rather than a continuous input that is part of the suffix
+     # - the action expert uses adaRMSNorm to inject the flow matching timestep
+-    pi05: bool = False
++    pi05: bool = False         # 启用 π0.5 的结构差异
+     # This config option is not used directly by the model, but it is read by the ModelTransformFactory.
+     discrete_state_input: bool = None  # type: ignore
+ 
+@@ -60,7 +60,7 @@ class Pi0Config(_model.BaseModelConfig):
+ 
+         return Pi0(self, rngs=nnx.Rngs(rng))
+ 
+-    @override
++    @override # 输出形状 [B,H,D]_Batch Size, Action Horizon, Action Dimension
+     def inputs_spec(self, *, batch_size: int = 1) -> tuple[_model.Observation, _model.Actions]:
+         image_spec = jax.ShapeDtypeStruct([batch_size, *_model.IMAGE_RESOLUTION, 3], jnp.float32)
+         image_mask_spec = jax.ShapeDtypeStruct([batch_size], jnp.bool_)
+diff --git a/src/openpi/policies/libero_policy.py b/src/openpi/policies/libero_policy.py
+index fe5aab0..da10187 100644
+--- a/src/openpi/policies/libero_policy.py
++++ b/src/openpi/policies/libero_policy.py
+@@ -49,6 +49,8 @@ class LiberoInputs(transforms.DataTransformFn):
+         # and two wrist views (left and right). If your dataset does not have a particular type
+         # of image, e.g. wrist images, you can comment it out here and replace it with zeros like we do for the
+         # right wrist image below.
++        
++        # 读取第三人称相机图像和腕部相机图像
+         base_image = _parse_image(data["observation/image"])
+         wrist_image = _parse_image(data["observation/wrist_image"])
+ 
+diff --git a/src/openpi/training/config.py b/src/openpi/training/config.py
+index 4ca47e1..6e0fc40 100644
+--- a/src/openpi/training/config.py
++++ b/src/openpi/training/config.py
+@@ -561,6 +561,53 @@ _CONFIGS = [
+     #
+     # Inference Aloha configs.
+     #
++    TrainConfig(
++        name="pi05_libero_lora",
++
++        # π0.5 模型 + LoRA
++        model=pi0_config.Pi0Config(
++            pi05=True,
++            action_horizon=10,
++            discrete_state_input=False,
++            paligemma_variant="gemma_2b_lora",
++            action_expert_variant="gemma_300m_lora",
++        ),
++
++        # LIBERO 示教数据
++        data=LeRobotLiberoDataConfig(
++            repo_id="physical-intelligence/libero",
++            base_config=DataConfig(prompt_from_task=True),
++            extra_delta_transform=False,
++        ),
++
++        # 从预训练 π0.5 Base 开始，而不是官方微调模型
++        weight_loader=weight_loaders.CheckpointWeightLoader(
++            "gs://openpi-assets/checkpoints/pi05_base/params"
++        ),
++
++        # 冻结对应的原始模型参数
++        freeze_filter=pi0_config.Pi0Config(
++            pi05=True,
++            action_horizon=10,
++            discrete_state_input=False,
++            paligemma_variant="gemma_2b_lora",
++            action_expert_variant="gemma_300m_lora",
++        ).get_freeze_filter(),
++
++        # LoRA 配置
++        ema_decay=None,
++
++        # 单卡 4090：先验证训练能否跑通
++        batch_size=1,
++        num_workers=0,
++        num_train_steps=20,
++        log_interval=1,
++        save_interval=20,
++
++        # 暂时不使用 W&B 在线日志
++        wandb_enabled=False,
++    ),
++
+     TrainConfig(
+         name="pi0_aloha",
+         model=pi0_config.Pi0Config(),
+@@ -970,6 +1017,29 @@ _CONFIGS = [
+     *polaris_config.get_polaris_configs(),
+ ]
+ 
++
++# Single-task LIBERO-10 book experiment.
++_CONFIGS.append(
++    dataclasses.replace(
++        next(c for c in _CONFIGS if c.name == "pi05_libero_lora"),
++        name="pi05_libero_book_lora",
++        num_train_steps=6000,
++        batch_size=1,
++        num_workers=0,
++        lr_schedule=_optimizer.CosineDecaySchedule(
++            warmup_steps=200,
++            peak_lr=2.5e-5,
++            decay_steps=6000,
++            decay_lr=2.5e-6,
++        ),
++        log_interval=20,
++        save_interval=2000,
++        keep_period=2000,
++        ema_decay=None,
++        wandb_enabled=False,
++    )
++)
++
+ if len({config.name for config in _CONFIGS}) != len(_CONFIGS):
+     raise ValueError("Config names must be unique.")
+ _CONFIGS_DICT = {config.name: config for config in _CONFIGS}
+diff --git a/src/openpi/training/data_loader.py b/src/openpi/training/data_loader.py
+index e2ee7dd..78e3b11 100644
+--- a/src/openpi/training/data_loader.py
++++ b/src/openpi/training/data_loader.py
+@@ -126,7 +126,7 @@ class FakeDataset(Dataset):
+     def __len__(self) -> int:
+         return self._num_samples
+ 
+-
++# 从 LeRobot 数据集读取训练样本
+ def create_torch_dataset(
+     data_config: _config.DataConfig, action_horizon: int, model_config: _model.BaseModelConfig
+ ) -> Dataset:
+@@ -138,6 +138,16 @@ def create_torch_dataset(
+         return FakeDataset(model_config, num_samples=1024)
+ 
+     dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
++    episode_file = os.environ.get("OPENPI_EPISODES_FILE")
++    episode_ids = None
++    if episode_file:
++        import json
++        with open(episode_file, encoding="utf-8") as f:
++            episode_ids = json.load(f)
++        if not episode_ids or not all(isinstance(i, int) for i in episode_ids):
++            raise ValueError("Invalid episode list")
++        logging.info("Using %d selected episodes", len(episode_ids))
++
+     dataset = lerobot_dataset.LeRobotDataset(
+         data_config.repo_id,
+         delta_timestamps={
+@@ -145,6 +155,38 @@ def create_torch_dataset(
+         },
+     )
+ 
++
++    # Filter training frames while preserving original episode indices.
++    if episode_ids is not None:
++        selected_ids = set(episode_ids)
++
++        # Read original episode IDs from the full dataset.
++        all_episode_ids = dataset.hf_dataset["episode_index"]
++
++        selected_indices = [
++            i for i, ep_id in enumerate(all_episode_ids)
++            if int(ep_id) in selected_ids
++        ]
++
++        matched_ids = {
++            int(all_episode_ids[i]) for i in selected_indices
++        }
++
++        if matched_ids != selected_ids:
++            raise ValueError(
++                f"Episode mismatch: missing {selected_ids - matched_ids}"
++            )
++
++        dataset = torch.utils.data.Subset(
++            dataset, selected_indices
++        )
++
++        logging.info(
++            "Selected %d episodes, %d frames",
++            len(selected_ids),
++            len(selected_indices),
++        )
++
+     if data_config.prompt_from_task:
+         dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
+ 
+@@ -168,7 +210,7 @@ def create_rlds_dataset(
+         datasets=data_config.datasets,
+     )
+ 
+-
++# 应用预处理、归一化等操作
+ def transform_dataset(dataset: Dataset, data_config: _config.DataConfig, *, skip_norm_stats: bool = False) -> Dataset:
+     """Transform the dataset by applying the data transforms."""
+     norm_stats = {}
+@@ -219,7 +261,7 @@ def transform_iterable_dataset(
+         is_batched=is_batched,
+     )
+ 
+-
++# 创建训练数据加载器
+ def create_data_loader(
+     config: _config.TrainConfig,
+     *,
+@@ -267,7 +309,7 @@ def create_data_loader(
+         framework=framework,
+     )
+ 
+-
++# 处理 Batch、Shuffle 和多 GPU 数据分配
+ def create_torch_data_loader(
+     data_config: _config.DataConfig,
+     model_config: _model.BaseModelConfig,
+diff --git a/src/openpi/transforms.py b/src/openpi/transforms.py
+index 272375e..661f4a2 100644
+--- a/src/openpi/transforms.py
++++ b/src/openpi/transforms.py
+@@ -75,7 +75,7 @@ def compose(transforms: Sequence[DataTransformFn]) -> DataTransformFn:
+     """Compose a sequence of transforms into a single transform."""
+     return CompositeTransform(transforms)
+ 
+-
++# 不同数据集字段如何映射
+ @dataclasses.dataclass(frozen=True)
+ class RepackTransform(DataTransformFn):
+     """Repacks an input dictionary into a new dictionary.
+@@ -110,9 +110,9 @@ class InjectDefaultPrompt(DataTransformFn):
+             data["prompt"] = np.asarray(self.prompt)
+         return data
+ 
+-
++# 动作、状态如何归一化
+ @dataclasses.dataclass(frozen=True)
+-class Normalize(DataTransformFn):
++class Normalize(DataTransformFn): 
+     norm_stats: at.PyTree[NormStats] | None
+     # If true, will use quantile normalization. Otherwise, normal z-score normalization will be used.
+     use_quantiles: bool = False
+@@ -144,7 +144,7 @@ class Normalize(DataTransformFn):
+         q01, q99 = stats.q01[..., : x.shape[-1]], stats.q99[..., : x.shape[-1]]
+         return (x - q01) / (q99 - q01 + 1e-6) * 2.0 - 1.0
+ 
+-
++# 预测后如何恢复原始量纲
+ @dataclasses.dataclass(frozen=True)
+ class Unnormalize(DataTransformFn):
+     norm_stats: at.PyTree[NormStats] | None
+@@ -199,7 +199,7 @@ class SubsampleActions(DataTransformFn):
+         data["actions"] = data["actions"][:: self.stride]
+         return data
+ 
+-
++# 绝对动作如何转换为相对动作
+ @dataclasses.dataclass(frozen=True)
+ class DeltaActions(DataTransformFn):
+     """Repacks absolute actions into delta action space."""
+@@ -243,7 +243,7 @@ class AbsoluteActions(DataTransformFn):
+ 
+         return data
+ 
+-
++# 语言指令如何变 Token
+ @dataclasses.dataclass(frozen=True)
+ class TokenizePrompt(DataTransformFn):
+     tokenizer: _tokenizer.PaligemmaTokenizer
+@@ -323,7 +323,7 @@ class PromptFromLeRobotTask(DataTransformFn):
+ 
+         return {**data, "prompt": prompt}
+ 
+-
++# 不同机器人维度如何补齐
+ @dataclasses.dataclass(frozen=True)
+ class PadStatesAndActions(DataTransformFn):
+     """Zero-pads states and actions to the model action dimension."""

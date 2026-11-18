@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+.env.*
+
+# Model weights
+checkpoints/
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+
+# Large evaluation artifacts
+*.mp4
+*.zip
+
+# Experiment caches
+.cache/
+wandb/
+*.log
+
+# Temporary files
+*.partial
+*.tmp
