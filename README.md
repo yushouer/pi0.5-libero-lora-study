@@ -98,9 +98,6 @@
 | **可训练参数合计** | **466,957,072** | **13.72%** |
 | 冻结参数 | **2,936,464,384** | **86.28%** |
 
-![LoRA 参数分布](assets/figures/parameter_allocation.png)
-
-所用 `freeze_filter` 冻结原始 LLM 的非 LoRA 权重，但保留其他部分非 LLM 参数参与训练。因此应将本实验准确表述为 **LoRA + 部分非 LLM 参数微调**，而非“纯 LoRA”或“仅训练 1.47% 参数”。
 
 ## 4. 实验结果
 
@@ -114,9 +111,6 @@
 | Step 4000 | 22 | 28 | **44%** | +32 pp |
 | Step 5999 | 29 | 21 | **58%** | **+46 pp** |
 
-![LIBERO 成功率](assets/figures/success_rate.png)
-
-图中误差线为每组 50 次结果的 **95% Wilson 二项区间**；同一任务随机初始化和仿真轨迹之间可能有关联，因此区间仅作描述性参考，不能替代多随机种子显著性检验。
 
 ### 4.2 独立验证集 Flow Matching Loss
 
@@ -149,8 +143,6 @@
 | 入盒 / 放置未完成 | **13** | **61.9%** | 书本移到盒口附近，反复调整直至超时 | 后隔间目标几何、放置深度、松爪时序、接触反馈 |
 | 抓取未成功 | **7** | **33.3%** | 书本仍留在桌面，机械臂却继续朝盒区运动 | 夹爪动作时序、抓取确认、失败恢复 |
 | 接触碰倒 / 失稳 | **1** | **4.8%** | 接近抓取时碰倒书本，未成功恢复 | 接触控制、薄物体夹持稳定性 |
-
-![失败类型](assets/figures/failure_modes.png)
 
 ![成功与失败关键帧](assets/figures/representative_failure_frames.jpg)
 
@@ -216,7 +208,7 @@ checkpoints/pi05_libero_book_lora/book_6k_v1/
 
 ### 6.4 LIBERO 闭环评测
 
-服务端（请先停止其他占用 8000 端口的模型服务）：
+服务端：
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 PYTHONFAULTHANDLER=1 \
@@ -246,17 +238,6 @@ CUDA_VISIBLE_DEVICES=0 python examples/libero/eval_book.py \
 
 Step 2000、4000 的评测只改变服务端 checkpoint 路径和视频输出目录，其他评测设置保持不变。
 
-### 6.5 重新绘制图表
-
-本仓库**已附上实际评测数据与绘图源码**，不需要安装 JAX 也可以复现图表：
-
-```bash
-pip install matplotlib
-python scripts/plot_results.py
-```
-
-数据：[`results/checkpoint_metrics.csv`](results/checkpoint_metrics.csv)、[`results/failure_cases.csv`](results/failure_cases.csv)。输出：`assets/figures/*.png`。
-
 ## 7. 实验局限与后续方向
 
 - **数据量有限：** 单任务 35 条训练 Episode；不能据此推断跨任务泛化能力。
@@ -273,4 +254,4 @@ python scripts/plot_results.py
 - [Physical Intelligence LIBERO dataset (Hugging Face)](https://huggingface.co/datasets/physical-intelligence/libero) — LeRobot 格式示教数据。
 - [LIBERO benchmark](https://libero-project.github.io/) — 机器人操作任务基准与仿真环境。
 
-本项目在上述开源工作上进行训练配置适配与实验评测。模型权重、数据和第三方代码的发布需分别遵循原项目许可与使用条款；**本资源包不包含大型模型权重或训练数据集本体**。
+本项目在上述开源工作上进行训练配置适配与实验评测, 模型权重、数据和第三方代码的发布需分别遵循原项目许可与使用条款。
